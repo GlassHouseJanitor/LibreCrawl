@@ -74,15 +74,79 @@ LibreCrawlPlugin.register({
     // Render header section
     renderHeader(analysis) {
         return `
-            <div class="plugin-header" style="margin-bottom: 32px;">
-                <h2 style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #e5e7eb;">
-                    🎓 E-E-A-T Analysis
-                </h2>
-                <p style="color: #9ca3af; font-size: 14px;">
-                    Experience, Expertise, Authoritativeness, and Trust signals across your website
-                </p>
+            <div class="plugin-header" style="margin-bottom: 32px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
+                <div>
+                    <h2 style="font-size: 28px; font-weight: 700; margin-bottom: 8px; color: #e5e7eb;">
+                        🎓 E-E-A-T Analysis
+                    </h2>
+                    <p style="color: #9ca3af; font-size: 14px;">
+                        Experience, Expertise, Authoritativeness, and Trust signals across your website
+                    </p>
+                </div>
+                <button class="btn-tab-export" onclick="LibreCrawlPlugin.loader.getPlugin('e-e-a-t').exportData()" title="Export E-E-A-T analysis as CSV">📥 Export CSV</button>
             </div>
         `;
+    },
+
+    // Build and download a CSV of the current E-E-A-T analysis
+    exportData() {
+        const state = (typeof crawlState !== 'undefined') ? crawlState : (window.crawlState || {});
+        const urls = state.urls || [];
+        const links = state.links || [];
+        if (!urls.length) {
+            this.utils.showNotification('No URLs to export', 'error');
+            return;
+        }
+        const analysis = this.analyzeEEAT(urls, links);
+        const ts = Math.floor(Date.now() / 1000);
+
+        const escape = (v) => {
+            if (v === null || v === undefined) return '';
+            let s = typeof v === 'string' ? v : String(v);
+            if (/[",\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+            return s;
+        };
+
+        const summaryRows = [
+            ['Metric', 'Value'],
+            ['Overall E-E-A-T Score', analysis.overallScore],
+            ['Total Pages', analysis.totalPages],
+            ['Pages with Author Info', analysis.pagesWithAuthor],
+            ['Pages with Schema Markup', analysis.pagesWithSchema],
+            ['Pages with External Links', analysis.pagesWithExternalLinks],
+            ['Pages with Open Graph Tags', analysis.pagesWithOGTags],
+            ['HTTPS Secure Pages', analysis.securePages],
+            ['Pages with Sufficient Content', analysis.pagesWithGoodContent],
+            ['Total External Citations', analysis.externalCitations],
+            ['Avg External Links per Page', analysis.avgExternalLinks.toFixed(2)]
+        ];
+
+        const pageHeader = ['URL', 'E-E-A-T Score', 'Has Author', 'Has Schema', 'External Links'];
+        const pageRows = analysis.topPages.map(p => [
+            p.url, p.score, p.hasAuthor ? 'yes' : 'no', p.hasSchema ? 'yes' : 'no', p.externalLinks
+        ]);
+
+        const lines = [];
+        lines.push('# E-E-A-T Summary');
+        summaryRows.forEach(r => lines.push(r.map(escape).join(',')));
+        lines.push('');
+        lines.push('# Per-Page Scores');
+        lines.push(pageHeader.map(escape).join(','));
+        pageRows.forEach(r => lines.push(r.map(escape).join(',')));
+
+        const content = lines.join('\r\n');
+        const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = `librecrawl_eeat_${ts}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        this.utils.showNotification(`Exported librecrawl_eeat_${ts}.csv`, 'success');
     },
 
     // Render score cards

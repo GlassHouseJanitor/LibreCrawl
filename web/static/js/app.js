@@ -2295,3 +2295,251 @@ function renderIssueRow(row, issue, index) {
         <td style="word-break: break-word;" title="${issue.details}">${issue.details}</td>
     `;
 }
+
+// ============================================================================
+// Per-tab CSV export
+// ============================================================================
+
+function csvEscape(value) {
+    if (value === null || value === undefined) return '';
+    let s = typeof value === 'string' ? value : String(value);
+    if (/[",\n\r]/.test(s)) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+function rowsToCsv(rows) {
+    return rows.map(row => row.map(csvEscape).join(',')).join('\r\n');
+}
+
+function downloadFile(content, filename, mimetype) {
+    const blob = new Blob([content], { type: mimetype });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+}
+
+function tabTimestamp() {
+    return Math.floor(Date.now() / 1000);
+}
+
+function buildOverviewRows(urls) {
+    const header = [
+        'Address', 'Status', 'Title', 'Meta Description', 'H1',
+        'Words', 'Response (ms)', 'Analytics', 'OG Tags', 'JSON-LD',
+        'Internal Links', 'External Links', 'Images', 'JS', 'Content Type'
+    ];
+    const rows = [header];
+    urls.forEach(u => {
+        const ogCount = u.og_tags ? Object.keys(u.og_tags).length : 0;
+        const jsonLdCount = Array.isArray(u.json_ld) ? u.json_ld.length : 0;
+        const analytics = u.analytics
+            ? Object.entries(u.analytics).filter(([, v]) => v).map(([k]) => k).join('; ')
+            : '';
+        rows.push([
+            u.url || '',
+            u.status_code ?? '',
+            u.title || '',
+            u.meta_description || '',
+            Array.isArray(u.h1) ? u.h1.join(' | ') : (u.h1 || ''),
+            u.word_count ?? '',
+            u.response_time ?? '',
+            analytics,
+            ogCount,
+            jsonLdCount,
+            u.internal_links ?? '',
+            u.external_links ?? '',
+            u.images ?? '',
+            u.js_files ?? u.js ?? '',
+            u.content_type || ''
+        ]);
+    });
+    return rows;
+}
+
+function buildInternalExternalRows(urls) {
+    const header = ['Address', 'Status', 'Content Type', 'Size', 'Title'];
+    const rows = [header];
+    urls.forEach(u => {
+        rows.push([
+            u.url || '',
+            u.status_code ?? '',
+            u.content_type || '',
+            u.size ?? u.content_length ?? '',
+            u.title || ''
+        ]);
+    });
+    return rows;
+}
+
+function buildStatusCodesRows(urls) {
+    const counts = {};
+    urls.forEach(u => {
+        const isZero = u.status_code === 0 || u.status_code === null || u.status_code === undefined;
+        const key = isZero ? `0|${u.error_type || 'unknown'}` : String(u.status_code);
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    const keys = Object.keys(counts).sort((a, b) => {
+        const aZ = a.startsWith('0|'), bZ = b.startsWith('0|');
+        if (aZ && !bZ) return 1;
+        if (!aZ && bZ) return -1;
+        if (aZ && bZ) return a.localeCompare(b);
+        return parseInt(a) - parseInt(b);
+    });
+    const total = urls.length || 1;
+    const rows = [['Status Code', 'Status', 'Count', 'Percentage']];
+    keys.forEach(key => {
+        const count = counts[key];
+        const pct = ((count / total) * 100).toFixed(1) + '%';
+        let displayCode, statusText;
+        if (key.startsWith('0|')) {
+            displayCode = '0';
+            statusText = (typeof getStatusCodeText === 'function')
+                ? getStatusCodeText(0, key.slice(2))
+                : key.slice(2);
+        } else {
+            displayCode = key;
+            statusText = (typeof getStatusCodeText === 'function')
+                ? getStatusCodeText(parseInt(key))
+                : '';
+        }
+        rows.push([displayCode, statusText, count, pct]);
+    });
+    return rows;
+}
+
+function buildLinksRows(links) {
+    const header = ['Link Type', 'Source URL', 'Target URL', 'Status', 'Anchor Text', 'Placement', 'Domain'];
+    const rows = [header];
+    links.forEach(l => {
+        const linkType = l.is_internal === false ? 'external' : (l.is_internal === true ? 'internal' : (l.type || ''));
+        let domain = '';
+        try {
+            domain = l.target_url ? new URL(l.target_url).hostname : '';
+        } catch (e) { domain = ''; }
+        rows.push([
+            linkType,
+            l.source_url || '',
+            l.target_url || '',
+            l.target_status ?? '',
+            l.anchor_text || '',
+            l.placement || '',
+            domain
+        ]);
+    });
+    return rows;
+}
+
+function buildIssuesRows(issues) {
+    const header = ['URL', 'Type', 'Category', 'Issue', 'Details'];
+    const rows = [header];
+    issues.forEach(i => {
+        rows.push([
+            i.url || '',
+            i.type || '',
+            i.category || '',
+            i.issue || '',
+            i.details || ''
+        ]);
+    });
+    return rows;
+}
+
+function buildPageSpeedRows(results) {
+    const header = [
+        'URL', 'Device', 'Performance Score', 'Analysis Date',
+        'FCP (s)', 'LCP (s)', 'CLS', 'Speed Index (s)', 'TTI (s)', 'Error'
+    ];
+    const rows = [header];
+    results.forEach(r => {
+        ['mobile', 'desktop'].forEach(device => {
+            const d = r[device] || {};
+            const m = d.metrics || {};
+            rows.push([
+                r.url || '',
+                device,
+                d.performance_score ?? '',
+                r.analysis_date || '',
+                m.first_contentful_paint ?? '',
+                m.largest_contentful_paint ?? '',
+                m.cumulative_layout_shift ?? '',
+                m.speed_index ?? '',
+                m.time_to_interactive ?? '',
+                d.success === false ? (d.error || 'Analysis failed') : ''
+            ]);
+        });
+    });
+    return rows;
+}
+
+function exportTabData(tabName) {
+    const urls = crawlState.urls || [];
+    const links = crawlState.links || [];
+    const issues = window.currentIssues || crawlState.issues || [];
+    const ts = tabTimestamp();
+
+    let rows = null;
+    let filename = '';
+
+    switch (tabName) {
+        case 'overview':
+            if (!urls.length) { showNotification('No URLs to export', 'error'); return; }
+            rows = buildOverviewRows(urls);
+            filename = `librecrawl_overview_${ts}.csv`;
+            break;
+        case 'internal': {
+            const internal = urls.filter(u => isInternalURL(u.url));
+            if (!internal.length) { showNotification('No internal URLs to export', 'error'); return; }
+            rows = buildInternalExternalRows(internal);
+            filename = `librecrawl_internal_${ts}.csv`;
+            break;
+        }
+        case 'external': {
+            const external = urls.filter(u => !isInternalURL(u.url));
+            if (!external.length) { showNotification('No external URLs to export', 'error'); return; }
+            rows = buildInternalExternalRows(external);
+            filename = `librecrawl_external_${ts}.csv`;
+            break;
+        }
+        case 'status-codes':
+            if (!urls.length) { showNotification('No URLs to export', 'error'); return; }
+            rows = buildStatusCodesRows(urls);
+            filename = `librecrawl_status_codes_${ts}.csv`;
+            break;
+        case 'links':
+            if (!links.length) { showNotification('No links to export', 'error'); return; }
+            rows = buildLinksRows(links);
+            filename = `librecrawl_links_${ts}.csv`;
+            break;
+        case 'issues': {
+            const filter = (crawlState.filters && crawlState.filters.issueFilter) || 'all';
+            const filtered = filter === 'all' ? issues : issues.filter(i => i.type === filter);
+            if (!filtered.length) { showNotification('No issues to export', 'error'); return; }
+            rows = buildIssuesRows(filtered);
+            filename = `librecrawl_issues_${filter}_${ts}.csv`;
+            break;
+        }
+        case 'pagespeed': {
+            const ps = (crawlState.stats && crawlState.stats.pagespeed_results) || [];
+            if (!ps.length) { showNotification('No PageSpeed results to export', 'error'); return; }
+            rows = buildPageSpeedRows(ps);
+            filename = `librecrawl_pagespeed_${ts}.csv`;
+            break;
+        }
+        default:
+            showNotification('Unknown tab for export', 'error');
+            return;
+    }
+
+    downloadFile(rowsToCsv(rows), filename, 'text/csv;charset=utf-8');
+    showNotification(`Exported ${filename}`, 'success');
+}
+
+window.exportTabData = exportTabData;
